@@ -13,11 +13,12 @@ from pydantic import BaseModel, Field
 from uuid import uuid4
 
 IMAGES_DIR = Path("images")
-ROOT_HTML = Path("index.html")
 IMAGES_DIR.mkdir(exist_ok=True)
+STATIC_DIR = Path("images")
 
 app = FastAPI(title="Image Playground")
 app.mount("/images", StaticFiles(directory=IMAGES_DIR), name="images")
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 class ImageInfo(BaseModel):
@@ -62,9 +63,9 @@ def validate_image_filename(filename: str) -> None:
         raise HTTPException(status_code=404, detail=f"Image not found: {filename}")
 
 
-@app.get("/", response_class=FileResponse, include_in_schema=False)
+@app.get("/", include_in_schema=False)
 async def root() -> FileResponse:
-    return FileResponse(ROOT_HTML)
+    return FileResponse(STATIC_DIR / "index.html")
 
 
 @app.get("/list_images", response_model=ListImagesResponse)
