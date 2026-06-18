@@ -14,7 +14,7 @@ from uuid import uuid4
 
 IMAGES_DIR = Path("images")
 IMAGES_DIR.mkdir(exist_ok=True)
-STATIC_DIR = Path("images")
+STATIC_DIR = Path("static")
 
 app = FastAPI(title="Image Playground")
 app.mount("/images", StaticFiles(directory=IMAGES_DIR), name="images")
@@ -119,7 +119,7 @@ async def _generate_image(prompt: str, image_filenames: list[str] = [], size: st
             },
         )
     print(response.usage)
-    if response.data is None or len(response.data) != 0 or response.data[0].b64_json is None:
+    if response.data is None or len(response.data) != 1 or response.data[0].b64_json is None:
         raise RuntimeError(f"Did not get one image in the response: {response}")
     image_bytes = base64.b64decode(response.data[0].b64_json)
     output_filename = f"generate_image_{uuid4().hex[:12]}.png"
