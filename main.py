@@ -2,10 +2,42 @@ import asyncio
 import base64
 import json
 from pathlib import Path
+from urllib.parse import quote
 
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI, DefaultAioHttpClient
 from openai.types.images_response import ImagesResponse
+from pydantic import BaseModel, Field
 from uuid import uuid4
+
+IMAGES_DIR = Path("images")
+ROOT_HTML = Path("index.html")
+IMAGES_DIR.mkdir(exist_ok=True)
+
+app = FastAPI(title="Image Playground")
+app.mount("/images", StaticFiles(directory=IMAGES_DIR), name="images")
+
+
+class ImageInfo(BaseModel):
+    filename: str
+    url: str
+
+
+class ListImagesResponse(BaseModel):
+    images: list[ImageInfo]
+
+
+class GenerateImageRequest(BaseModel):
+    prompt: str
+    image_filenames: list[str] = Field(default_factory=list)
+    size: str = "3840x2160"
+
+
+class GenerateImageResponse(BaseModel):
+    image: ImageInfo
+
 
 auth_json = json.loads(Path("~/.codex/auth.json").expanduser().read_text())
 client = AsyncOpenAI(
@@ -14,7 +46,53 @@ client = AsyncOpenAI(
         base_url="https://chatgpt.com/backend-api/codex",
     )
 
-async def generate_image(prompt: str, image_filenames: list[str] = [], size: str = "3840x2160") -> str:
+
+def image_url(filename: str) -> str:
+    return f"/images/{quote(filename)}"
+
+
+def validate_image_filename(filename: str) -> None:
+    image_path = (IMAGES_DIR / filename).resolve()
+    images_root = IMAGES_DIR.resolve()
+    try:
+        image_path.relative_to(images_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid image filename: {filename}") from exc
+    if not image_path.is_file():
+        raise HTTPException(status_code=404, detail=f"Image not found: {filename}")
+
+
+@app.get("/", response_class=FileResponse, include_in_schema=False)
+async def root() -> FileResponse:
+    return FileResponse(ROOT_HTML)
+
+
+@app.get("/list_images", response_model=ListImagesResponse)
+async def list_images() -> ListImagesResponse:
+    images = [
+        ImageInfo(filename=image_path.name, url=image_url(image_path.name))
+        for image_path in sorted(IMAGES_DIR.iterdir())
+        if image_path.is_file()
+    ]
+    return ListImagesResponse(images=images)
+
+
+@app.post(
+    "/generate_image",
+    response_model=GenerateImageResponse,
+)
+async def generate_image(request: GenerateImageRequest) -> GenerateImageResponse:
+    for filename in request.image_filenames:
+        validate_image_filename(filename)
+    filename = await _generate_image(
+        prompt=request.prompt,
+        image_filenames=request.image_filenames,
+        size=request.size,
+    )
+    return GenerateImageResponse(image=ImageInfo(filename=filename, url=image_url(filename)))
+
+
+async def _generate_image(prompt: str, image_filenames: list[str] = [], size: str = "3840x2160") -> str:
     if len(image_filenames) == 0:
         response = await client.images.generate(
             model="gpt-image-2",
@@ -49,8 +127,15 @@ async def generate_image(prompt: str, image_filenames: list[str] = [], size: str
 
 
 async def main() -> None:
-    print(await generate_image("Hello world"))
+    import uvicorn
+
+    config = uvicorn.Config(app, host="127.0.0.1", port=8000)
+    server = uvicorn.Server(config)
+    await server.serve()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
